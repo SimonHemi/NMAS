@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% block content %}
+
+<form class="controls" method="get" action="{{ url_for('index') }}">
+  <label>Type
+    <select name="type">
+      <option value="ALL" {{ "selected" if selected_type=="ALL" else "" }}>All</option>
+      <option value="FAILED_LOGIN_BURST" {{ "selected" if selected_type=="FAILED_LOGIN_BURST" else "" }}>Failed Login Burst</option>
+      <option value="PORT_SCAN" {{ "selected" if selected_type=="PORT_SCAN" else "" }}>Port Scan</option>
+    </select>
+  </label>
+  <label>Since (hours)
+    <input type="number" name="hours" min="1" max="720" value="{{ hours }}"/>
+  </label>
+  <button type="submit">Apply</button>
+  <a class="button" href="{{ url_for('export_csv', type=selected_type, hours=hours, page=page, sort=sort, dir=dir) }}">Export CSV</a>
+  <button type="button" onclick="location.reload()" title="Reload the page" style="margin-left:8px">🔄 Refresh</button>
+</form>
+
+<section class="card" style="margin:12px 0;padding:12px;border:1px solid #ddd;border-radius:10px">
+  <h3 style="margin:0 0 10px">Test &amp; Simulate</h3>
+
+  <form id="sim-failed" onsubmit="return false" style="display:grid;grid-template-columns:repeat(6,minmax(120px,1fr));gap:8px;align-items:end">
+    <label>Source IP
+      <input name="source" placeholder="10.0.0.50" />
+    </label>
+    <label>Username
+      <input name="username" placeholder="admin" />
+    </label>
+    <label>Count
+      <input name="count" type="number" min="1" max="50" value="6"/>
+    </label>
+    <button id="btn-failed" type="button">Simulate Failed-Login Burst</button>
+  </form>
+
+  <div style="height:8px"></div>
+
+  <form id="sim-scan" onsubmit="return false" style="display:grid;grid-template-columns:repeat(6,minmax(120px,1fr));gap:8px;align-items:end">
+    <label>Source IP
+      <input name="source" placeholder="10.0.0.99" />
+    </label>
+    <label>Start Port
+      <input name="startPort" type="number" min="1" max="65535" value="20"/>
+    </label>
+    <label>Ports (n)
+      <input name="n" type="number" min="1" max="60" value="20"/>
+    </label>
+    <button id="btn-scan" type="button">Simulate Port Scan</button>
+    <button id="btn-detect" type="button" style="justify-self:start">Run Detection Now</button>
+  </form>
+
+  <p id="sim-msg" class="muted" style="margin-top:8px"></p>
+</section>
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin:8px 0">
+  <div class="muted">Showing page {{ page }} ({{ page_size }} per page)</div>
+  <div>
+    {% if page > 1 %}
+      <a href="{{ url_for('index', type=selected_type, hours=hours, page=page-1, sort=sort, dir=dir) }}">&larr; Prev</a>
+    {% endif %}
+    <span style="margin:0 8px"></span>
+    {% if has_more %}
+      <a href="{{ url_for('index', type=selected_type, hours=hours, page=page+1, sort=sort, dir=dir) }}">Next &rarr;</a>
+    {% endif %}
+  </div>
+</div>
+
+<div style="margin:14px 0">
+  <canvas id="chart"></canvas>
+</div>
+
+{% set flip = 'desc' if dir=='asc' else 'asc' %}
+<table>
+  <thead>
+    <tr>
+      <th><a href="{{ url_for('index', type=selected_type, hours=hours, page=1, sort='id', dir=flip if sort=='id' else 'asc') }}">ID</a></th>
+      <th><a href="{{ url_for('index', type=selected_type, hours=hours, page=1, sort='ts', dir=flip if sort=='ts' else 'desc') }}">Time (UTC)</a></th>
+      <th><a href="{{ url_for('index', type=selected_type, hours=hours, page=1, sort='type', dir=flip if sort=='type' else 'asc') }}">Type</a></th>
+      <th><a href="{{ url_for('index', type=selected_type, hours=hours, page=1, sort='source', dir=flip if sort=='source' else 'asc') }}">Source</a></th>
+      <th>User</th>
+      <th><a href="{{ url_for('index', type=selected_type, hours=hours, page=1, sort='count', dir=flip if sort=='count' else 'desc') }}">Count</a></th>
+      <th>Window</th>
+      <th>Details</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td>{{ r["id"] }}</td>
+      <td>{{ r["ts"] }}</td>
+      <td>{{ r["type"] }}</td>
+      <td>{{ r["source"] }}</td>
+      <td>{{ r["username"] }}</td>
+      <td>{{ r["count"] }}</td>
+      <td class="muted">{{ r["window_start"] }} → {{ r["window_end"] }}</td>
+      <td>{{ r["details"] }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<script id="series-data" type="application/json">{{ series|tojson }}</script>
+
+<script>
+  // chart (super-lightweight)
+  (function(){
+    const raw = document.getElementById('series-data').textContent || "[]";
+    /** @type {[string, number][]} */
+    const series = JSON.parse(raw);
+
+    const cvs = document.getElementById('chart');
+    const ctx = cvs.getContext('2d');
+    const W = cvs.clientWidth || 600, H = 200;
+    cvs.width = W; cvs.height = H;
+
+    if (!series.length){
+      ctx.fillText('No data in range', 10, 20);
+      return;
+    }
+
+    const xs = series.map(s => new Date(s[0]).getTime());
+    const ys = series.map(s => s[1]);
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = 0, maxY = Math.max(...ys);
+
+    const xScale = t => ((t - minX) / (maxX - minX || 1)) * (W - 40) + 30;
+    const yScale = v => H - 20 - ((v - minY) / (maxY - minY || 1)) * (H - 50);
+
+    // axes
+    ctx.strokeStyle = '#ccc'; ctx.beginPath();
+    ctx.moveTo(30,10); ctx.lineTo(30,H-20); ctx.lineTo(W-10,H-20); ctx.stroke();
+
+    // line
+    ctx.strokeStyle = '#555'; ctx.beginPath();
+    series.forEach((pt,i)=>{
+      const x = xScale(new Date(pt[0]).getTime());
+      const y = yScale(pt[1]);
+      if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    });
+    ctx.stroke();
+
+    // points
+    ctx.fillStyle = '#000';
+    series.forEach(pt=>{
+      const x = xScale(new Date(pt[0]).getTime());
+      const y = yScale(pt[1]);
+      ctx.beginPath(); ctx.arc(x,y,3,0,Math.PI*2); ctx.fill();
+    });
+  })();
+
+  // simulate actions
+  (function(){
+    async function post(url, body){
+      const r = await fetch(url,{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(body||{}),
+        credentials: 'same-origin'
+      });
+      return r.json();
+    }
+    const msg = document.getElementById('sim-msg');
+
+    document.getElementById('btn-failed')?.addEventListener('click', async ()=>{
+      const f = document.getElementById('sim-failed');
+      const body = {
+        source: f.source.value || undefined,
+        username: f.username.value || undefined,
+        count: parseInt(f.count.value||'6',10)
+      };
+      const res = await post('/api/simulate/failed-login', body);
+      msg.textContent = res.ok ? `Inserted ${res.inserted||0} failed-login events. Reloading...` : (res.error||'Error');
+      if(res.ok) location.reload();
+    });
+
+    document.getElementById('btn-scan')?.addEventListener('click', async ()=>{
+      const f = document.getElementById('sim-scan');
+      const body = {
+        source: f.source.value || undefined,
+        startPort: parseInt(f.startPort.value||'20',10),
+        n: parseInt(f.n.value||'20',10)
+      };
+      const res = await post('/api/simulate/port-scan', body);
+      msg.textContent = res.ok ? `Inserted ${res.inserted||0} scan events. Reloading...` : (res.error||'Error');
+      if(res.ok) location.reload();
+    });
+
+    document.getElementById('btn-detect')?.addEventListener('click', async ()=>{
+      const res = await post('/api/detect-now', {});
+      msg.textContent = res.ok ? 'Detection run complete. Reloading...' : (res.error||'Error');
+      if(res.ok) location.reload();
+    });
+  })();
+</script>
+<script>
+  // Auto-refresh every 15 seconds
+  setInterval(function () {
+    window.location.reload();
+  }, 15000);
+</script>
+
+{% endblock %}
