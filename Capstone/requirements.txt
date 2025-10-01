@@ -1,0 +1,9 @@
+## Requirements
+- **Python 3.11+**
+- **Pip/venv** for virtual environment
+- Packages: `flask`, `aiosmtpd` (optional for email testing), `sqlite3` (built in)
+
+Install dependencies (inside your venv):
+```powershell
+pip install flask aiosmtpd
+```

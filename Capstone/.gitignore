@@ -1,0 +1,28 @@
+# Byte-compiled / cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.spec
+
+# Databases and logs
+events.db*
+alerts.json
+alerts.log
+
+# Executables
+*.exe
+
+# VS Code
+.vscode/
+workspace.code-workspace
